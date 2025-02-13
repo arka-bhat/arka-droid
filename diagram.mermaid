@@ -1,0 +1,54 @@
+flowchart TB
+    subgraph Internet["Internet"]
+        Slack["Slack Platform"]
+        OpenRouter["OpenRouter API"]
+    end
+
+    subgraph Ngrok["Ngrok Tunnel"]
+        NT["Ngrok Public URL"]
+    end
+
+    subgraph LocalMachine["Local Development Machine"]
+        subgraph Flask["Flask Application (Port 3000)"]
+            EP["/slack/events Endpoint"]
+            SH["Slack Request Handler"]
+            
+            subgraph EventHandlers["Event Handlers"]
+                MH["Message Handler"]
+                AM["App Mention Handler"]
+            end
+            
+            subgraph Components["Core Components"]
+                Bot["ChatBot Class"]
+                OR["OpenRouter Client"]
+            end
+        end
+        
+        Redis["Redis Cache"]
+    end
+
+    %% Connections
+    Slack -->|Events| NT
+    NT -->|Forwards| EP
+    EP --> SH
+    SH --> EventHandlers
+    
+    MH --> Bot
+    AM --> Bot
+    
+    Bot <--> Redis
+    Bot --> OR
+    OR <--> OpenRouter
+
+    %% Styles
+    classDef internet fill:#f9f9f9,stroke:#000000
+    classDef ngrok fill:#1F69FF,stroke:#000000,color:#fff
+    classDef local fill:#d1eaff,stroke:#000000
+    classDef components fill:#ffe7d1,stroke:#000000
+    classDef cache fill:#d1ffd6,stroke:#000000
+    
+    class Internet internet
+    class Ngrok ngrok
+    class LocalMachine local
+    class Components components
+    class Redis cache
