@@ -48,6 +48,6 @@ The server will start on port 3000.
 
 ## Usage
 
--   @mention the bot to get responses
+-   @mention the bot to get responses (Example: `Hello @Arka's Droid, what is capital of US`)
 -   Type `list my last 5 messages` to see recent conversation
 -   Bot maintains context for each channel/thread
