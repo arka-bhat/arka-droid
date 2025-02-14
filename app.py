@@ -21,7 +21,7 @@ app = App(token=os.environ["SLACK_BOT_TOKEN"])
 SLACK_SIGNING_SECRET = os.environ["SLACK_SIGNING_SECRET"]
 SLACK_CLIENT_ID = os.getenv("SLACK_CLIENT_ID")
 SLACK_CLIENT_SECRET = os.getenv("SLACK_CLIENT_SECRET")
-SLACK_REDIRECT_URI = os.getenv("SLACK_REDIRECT_URI")
+
 # Initialize Redis client
 redis_client = redis.Redis(
     host=os.environ.get("REDIS_HOST", "localhost"),
@@ -199,6 +199,13 @@ def verify_slack_request(req):
         raise ValueError("Invalid signature")
 
     return True
+
+def get_ngrok_url():
+    ngrok_info = requests.get("http://localhost:4040/api/tunnels").json()
+    return ngrok_info['tunnels'][0]['public_url']
+
+SLACK_REDIRECT_URI = get_ngrok_url() + "/slack/oauth/callback"
+print(f"slack redirect URI: {SLACK_REDIRECT_URI}")
 
 @flask_app.route("/slack/oauth/callback")
 def oauth_callback():
