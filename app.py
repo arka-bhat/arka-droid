@@ -233,20 +233,33 @@ print(f"slack redirect URI: {SLACK_REDIRECT_URI}")
 
 @flask_app.route("/slack/install", methods=["GET"])
 def slack_install():
-    # State parameter to prevent CSRF
     state = hashlib.sha256(os.urandom(1024)).hexdigest()
+    redis_client.setex(f"slack_state:{state}", 300, "1")
     
-    # Store state in Redis with expiration
-    redis_client.setex(f"slack_state:{state}", 300, "1")  # 5 minutes expiration
+    # Updated scopes to include all necessary permissions
+    scopes = [
+        "app_mentions:read",
+        "channels:history",
+        "channels:read",
+        "chat:write",
+        "commands",
+        "im:history",
+        "im:write",
+        "incoming-webhook"
+    ]
     
-    # Construct the OAuth URL
-    oauth_url = f"https://slack.com/oauth/v2/authorize?client_id={SLACK_CLIENT_ID}&scope=app_mentions:read,channels:history,channels:read,chat:write,commands&user_scope=&state={state}&redirect_uri={SLACK_REDIRECT_URI}"
+    oauth_url = (
+        f"https://slack.com/oauth/v2/authorize?"
+        f"client_id={SLACK_CLIENT_ID}&"
+        f"scope={','.join(scopes)}&"
+        f"state={state}&"
+        f"redirect_uri={SLACK_REDIRECT_URI}"
+    )
     
     return f'<a href="{oauth_url}">Install to Slack</a>'
 
 @flask_app.route("/slack/oauth/callback")
 def oauth_callback():
-    # Verify state parameter
     state = request.args.get('state')
     stored_state = redis_client.get(f"slack_state:{state}")
     if not stored_state:
@@ -269,6 +282,9 @@ def oauth_callback():
         )
         response.raise_for_status()
         data = response.json()
+        
+        # Add debug logging
+        print("OAuth Response:", json.dumps(data, indent=2))
 
         if not data.get('ok'):
             raise ValueError(f"Slack OAuth error: {data.get('error')}")
@@ -288,11 +304,14 @@ def oauth_callback():
             json.dumps(installation)
         )
 
+        # Add debug logging
+        print(f"Stored installation for team {data['team']['name']}")
+
         return "Installation successful! You can close this window."
 
     except Exception as e:
         print(f"Installation error: {str(e)}")
-        return "Installation failed. Please try again.", 400
+        return f"Installation failed: {str(e)}", 400
     
 @flask_app.route("/slack/events", methods=["POST"])
 def slack_events():
