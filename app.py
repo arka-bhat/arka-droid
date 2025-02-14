@@ -1,10 +1,12 @@
+import hashlib
+import hmac
 import os
 import json
 import time
 from typing import List, Optional, Dict
 
 import requests
-from flask import Flask, request
+from flask import Flask, jsonify, request
 import redis
 from dotenv import load_dotenv
 from slack_bolt import App
@@ -16,7 +18,7 @@ load_dotenv()
 model = "mistralai/mistral-small-24b-instruct-2501:free"
 # Initialize Slack app
 app = App(token=os.environ["SLACK_BOT_TOKEN"])
-
+SLACK_SIGNING_SECRET = os.environ["SLACK_SIGNING_SECRET"]
 # Initialize Redis client
 redis_client = redis.Redis(
     host=os.environ.get("REDIS_HOST", "localhost"),
@@ -171,9 +173,43 @@ bot = ChatBot(redis_client, llm_client)
 flask_app = Flask(__name__)
 handler = SlackRequestHandler(app)
 
+def verify_slack_request(req):
+    """
+    Verifies Slack's request signature.
+    """
+    slack_signature = req.headers.get('X-Slack-Signature')
+    slack_request_timestamp = req.headers.get('X-Slack-Request-Timestamp')
+
+    # Ensure the request is not too old (Slack allows a 5-minute window)
+    if abs(time.time() - int(slack_request_timestamp)) > 60 * 5:
+        raise ValueError("Request timestamp is too old")
+
+    # Create the base string from the request
+    sig_basestring = f"v0:{slack_request_timestamp}:{req.get_data().decode('utf-8')}"
+
+    # Create the expected signature using your signing secret
+    secret = bytes(SLACK_SIGNING_SECRET, 'utf-8')
+    sig_hash = "v0=" + hmac.new(secret, sig_basestring.encode('utf-8'), hashlib.sha256).hexdigest()
+
+    # Compare the computed signature with Slack's signature
+    if not hmac.compare_digest(sig_hash, slack_signature):
+        raise ValueError("Invalid signature")
+
+    return True
+
+
 @flask_app.route("/slack/events", methods=["POST"])
 def slack_events():
-    return handler.handle(request)
+    try:
+        # Verify the request
+        verify_slack_request(request)
+
+        # Pass the request to the SlackRequestHandler for further processing
+        return handler.handle(request)
+    
+    except ValueError as e:
+        print(f"Request verification failed: {e}")
+        return jsonify({"error": "Unauthorized"}), 401
 
 @app.event("message")
 def handle_message(event, say, client):
