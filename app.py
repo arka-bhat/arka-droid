@@ -17,7 +17,24 @@ load_dotenv()
 
 model = "mistralai/mistral-small-24b-instruct-2501:free"
 # Initialize Slack app
-app = App(token=os.environ["SLACK_BOT_TOKEN"])
+def authorize(installing_user, client, installation):
+    try:
+        if not installation or not installation["bot_token"]:
+            raise ValueError("Bot token not found")
+        bot_token = installation["bot_token"]
+
+        return {
+            "bot_token": bot_token,
+            "user_token": installation["user_token"],
+            "team_id": installation["team_id"],
+            "bot_id": installation["bot_id"],
+        }
+    
+    except Exception as e:
+        print(f"Slack API error: {e.response['error']}")
+        return None
+    
+app = App(token=os.environ["SLACK_BOT_TOKEN"],signing_secret=os.environ["SLACK_SIGNING_SECRET"], authorize=authorize)
 SLACK_SIGNING_SECRET = os.environ["SLACK_SIGNING_SECRET"]
 SLACK_CLIENT_ID = os.getenv("SLACK_CLIENT_ID")
 SLACK_CLIENT_SECRET = os.getenv("SLACK_CLIENT_SECRET")
@@ -183,18 +200,14 @@ def verify_slack_request(req):
     slack_signature = req.headers.get('X-Slack-Signature')
     slack_request_timestamp = req.headers.get('X-Slack-Request-Timestamp')
 
-    # Ensure the request is not too old (Slack allows a 5-minute window)
     if abs(time.time() - int(slack_request_timestamp)) > 60 * 5:
         raise ValueError("Request timestamp is too old")
 
-    # Create the base string from the request
     sig_basestring = f"v0:{slack_request_timestamp}:{req.get_data().decode('utf-8')}"
 
-    # Create the expected signature using your signing secret
     secret = bytes(SLACK_SIGNING_SECRET, 'utf-8')
     sig_hash = "v0=" + hmac.new(secret, sig_basestring.encode('utf-8'), hashlib.sha256).hexdigest()
 
-    # Compare the computed signature with Slack's signature
     if not hmac.compare_digest(sig_hash, slack_signature):
         raise ValueError("Invalid signature")
 
