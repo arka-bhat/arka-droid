@@ -54,11 +54,8 @@ def authorize(context={}, **kwargs):
     
 app = App(
     signing_secret=os.environ["SLACK_SIGNING_SECRET"],
-    client_id=os.environ["SLACK_CLIENT_ID"],
-    client_secret=os.environ["SLACK_CLIENT_SECRET"],
     authorize=authorize,
     installation_store=None,  # We're handling installation storage ourselves
-    state_store=None,  # We're handling state ourselves
     token=None  # Don't set a token since we're using authorize
 )
 SLACK_SIGNING_SECRET = os.environ["SLACK_SIGNING_SECRET"]
