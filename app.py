@@ -17,35 +17,50 @@ load_dotenv()
 
 model = "mistralai/mistral-small-24b-instruct-2501:free"
 # Initialize Slack app
-def authorize(*args, **kwargs):
+def authorize(context={}, **kwargs):
     try:
-        # Get team_id from the request
-        context = kwargs.get("context", {})
-        team_id = context.get("team_id")
-        enterprise_id = context.get("enterprise_id")
-
-        if not team_id and not enterprise_id:
-            raise ValueError("No team_id or enterprise_id found")
+        # Get team_id from different possible locations in the context
+        team_id = (
+            context.get("team_id") or 
+            context.get("team", {}).get("id") or 
+            context.get("enterprise_id")
+        )
+        
+        print(f"Authorization Context: {json.dumps(context, indent=2)}")  # Debug log
+        
+        if not team_id:
+            # Try to get team_id from the event payload
+            event = context.get("event", {})
+            team_id = event.get("team") or context.get("team_id")
+            
+        if not team_id:
+            raise ValueError(f"No team_id found in context: {context}")
 
         # Get installation data from Redis
         installation_data = redis_client.get(f"slack_installation:{team_id}")
         if not installation_data:
-            raise ValueError("No installation found for team")
+            raise ValueError(f"No installation found for team {team_id}")
 
         installation = json.loads(installation_data)
         
         return {
             "bot_token": installation["bot_token"],
             "bot_user_id": installation["bot_user_id"],
-            "bot_id": installation.get("bot_id"),
-            "team_id": team_id,
-            "enterprise_id": enterprise_id
+            "team_id": team_id
         }
     except Exception as e:
         print(f"Authorization error: {str(e)}")
         return None
     
-app = App(token=os.environ["SLACK_BOT_TOKEN"],signing_secret=os.environ["SLACK_SIGNING_SECRET"], authorize=authorize)
+app = App(
+    signing_secret=os.environ["SLACK_SIGNING_SECRET"],
+    client_id=os.environ["SLACK_CLIENT_ID"],
+    client_secret=os.environ["SLACK_CLIENT_SECRET"],
+    authorize=authorize,
+    installation_store=None,  # We're handling installation storage ourselves
+    state_store=None,  # We're handling state ourselves
+    token=None  # Don't set a token since we're using authorize
+)
 SLACK_SIGNING_SECRET = os.environ["SLACK_SIGNING_SECRET"]
 SLACK_CLIENT_ID = os.getenv("SLACK_CLIENT_ID")
 SLACK_CLIENT_SECRET = os.getenv("SLACK_CLIENT_SECRET")
@@ -270,7 +285,6 @@ def oauth_callback():
         return "Missing code parameter", 400
 
     try:
-        # Exchange code for tokens
         response = requests.post(
             "https://slack.com/api/oauth.v2.access",
             data={
@@ -283,29 +297,45 @@ def oauth_callback():
         response.raise_for_status()
         data = response.json()
         
-        # Add debug logging
         print("OAuth Response:", json.dumps(data, indent=2))
 
         if not data.get('ok'):
             raise ValueError(f"Slack OAuth error: {data.get('error')}")
 
-        # Store installation data in Redis
+        # Store complete installation data
+        team_id = data['team']['id']
         installation = {
-            'team_id': data['team']['id'],
+            'team_id': team_id,
             'team_name': data['team']['name'],
             'bot_token': data['access_token'],
             'bot_user_id': data['bot_user_id'],
-            'bot_id': data.get('bot_id'),
+            'incoming_webhook': data.get('incoming_webhook'),
+            'scope': data.get('scope'),
+            'token_type': data.get('token_type'),
+            'app_id': data.get('app_id'),
+            'authed_user': data.get('authed_user'),
             'installed_at': time.time()
         }
         
-        redis_client.set(
-            f"slack_installation:{data['team']['id']}", 
-            json.dumps(installation)
-        )
+        # Store in Redis with team ID as key
+        redis_key = f"slack_installation:{team_id}"
+        redis_client.set(redis_key, json.dumps(installation))
+        print(f"Stored installation data in Redis with key: {redis_key}")
 
-        # Add debug logging
-        print(f"Stored installation for team {data['team']['name']}")
+        # Verify the data was stored
+        stored_data = redis_client.get(redis_key)
+        if not stored_data:
+            raise ValueError("Failed to store installation data")
+
+        # Try to send a welcome message
+        try:
+            webhook_url = data.get('incoming_webhook', {}).get('url')
+            if webhook_url:
+                requests.post(webhook_url, json={
+                    "text": "Hello! I've been successfully installed in your workspace! 👋\nYou can mention me in any channel I'm in to start a conversation."
+                })
+        except Exception as e:
+            print(f"Error sending welcome message: {e}")
 
         return "Installation successful! You can close this window."
 
@@ -327,7 +357,10 @@ def slack_events():
         return jsonify({"error": "Unauthorized"}), 401
 
 @app.event("message")
-def handle_message(event, say, client):
+def handle_message(event, say, context, client):
+    print(f"Received message event: {json.dumps(event, indent=2)}")
+    print(f"Context: {json.dumps(context, indent=2)}")
+    
     if event.get("bot_id"):
         return
 
