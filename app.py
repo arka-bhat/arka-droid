@@ -17,21 +17,32 @@ load_dotenv()
 
 model = "mistralai/mistral-small-24b-instruct-2501:free"
 # Initialize Slack app
-def authorize(installing_user, client, installation):
+def authorize(*args, **kwargs):
     try:
-        if not installation or not installation["bot_token"]:
-            raise ValueError("Bot token not found")
-        bot_token = installation["bot_token"]
+        # Get team_id from the request
+        context = kwargs.get("context", {})
+        team_id = context.get("team_id")
+        enterprise_id = context.get("enterprise_id")
 
+        if not team_id and not enterprise_id:
+            raise ValueError("No team_id or enterprise_id found")
+
+        # Get installation data from Redis
+        installation_data = redis_client.get(f"slack_installation:{team_id}")
+        if not installation_data:
+            raise ValueError("No installation found for team")
+
+        installation = json.loads(installation_data)
+        
         return {
-            "bot_token": bot_token,
-            "user_token": installation["user_token"],
-            "team_id": installation["team_id"],
-            "bot_id": installation["bot_id"],
+            "bot_token": installation["bot_token"],
+            "bot_user_id": installation["bot_user_id"],
+            "bot_id": installation.get("bot_id"),
+            "team_id": team_id,
+            "enterprise_id": enterprise_id
         }
-    
     except Exception as e:
-        print(f"Slack API error: {e.response['error']}")
+        print(f"Authorization error: {str(e)}")
         return None
     
 app = App(token=os.environ["SLACK_BOT_TOKEN"],signing_secret=os.environ["SLACK_SIGNING_SECRET"], authorize=authorize)
@@ -220,36 +231,68 @@ def get_ngrok_url():
 SLACK_REDIRECT_URI = get_ngrok_url() + "/slack/oauth/callback"
 print(f"slack redirect URI: {SLACK_REDIRECT_URI}")
 
+@flask_app.route("/slack/install", methods=["GET"])
+def slack_install():
+    # State parameter to prevent CSRF
+    state = hashlib.sha256(os.urandom(1024)).hexdigest()
+    
+    # Store state in Redis with expiration
+    redis_client.setex(f"slack_state:{state}", 300, "1")  # 5 minutes expiration
+    
+    # Construct the OAuth URL
+    oauth_url = f"https://slack.com/oauth/v2/authorize?client_id={SLACK_CLIENT_ID}&scope=app_mentions:read,channels:history,channels:read,chat:write,commands&user_scope=&state={state}&redirect_uri={SLACK_REDIRECT_URI}"
+    
+    return f'<a href="{oauth_url}">Install to Slack</a>'
+
 @flask_app.route("/slack/oauth/callback")
 def oauth_callback():
-    # Step 1: Get the `code` from Slack's callback
+    # Verify state parameter
+    state = request.args.get('state')
+    stored_state = redis_client.get(f"slack_state:{state}")
+    if not stored_state:
+        return "Invalid state parameter", 400
+
     code = request.args.get('code')
     if not code:
-        return "Error: Missing code", 400
+        return "Missing code parameter", 400
 
-    # Step 2: Exchange the code for an access token
-    token_url = "https://slack.com/api/oauth.v2.access"
-    data = {
-        'client_id': SLACK_CLIENT_ID,
-        'client_secret': SLACK_CLIENT_SECRET,
-        'code': code,
-        'redirect_uri': SLACK_REDIRECT_URI
-    }
-    
-    # Make the request to Slack to exchange the code for a token
-    response = requests.post(token_url, data=data)
-    response_data = response.json()
+    try:
+        # Exchange code for tokens
+        response = requests.post(
+            "https://slack.com/api/oauth.v2.access",
+            data={
+                'client_id': SLACK_CLIENT_ID,
+                'client_secret': SLACK_CLIENT_SECRET,
+                'code': code,
+                'redirect_uri': SLACK_REDIRECT_URI
+            }
+        )
+        response.raise_for_status()
+        data = response.json()
 
-    if response_data.get("ok"):
-        # Successfully received access token
-        access_token = response_data["access_token"]
-        # Save the access token (e.g., in a database or session) for making Slack API calls
-        return "Slack bot installed successfully!"
+        if not data.get('ok'):
+            raise ValueError(f"Slack OAuth error: {data.get('error')}")
 
-    else:
-        # Handle errors (e.g., invalid code or denied permissions)
-        error_msg = response_data.get("error", "Unknown error")
-        return f"Error: {error_msg}", 400
+        # Store installation data in Redis
+        installation = {
+            'team_id': data['team']['id'],
+            'team_name': data['team']['name'],
+            'bot_token': data['access_token'],
+            'bot_user_id': data['bot_user_id'],
+            'bot_id': data.get('bot_id'),
+            'installed_at': time.time()
+        }
+        
+        redis_client.set(
+            f"slack_installation:{data['team']['id']}", 
+            json.dumps(installation)
+        )
+
+        return "Installation successful! You can close this window."
+
+    except Exception as e:
+        print(f"Installation error: {str(e)}")
+        return "Installation failed. Please try again.", 400
     
 @flask_app.route("/slack/events", methods=["POST"])
 def slack_events():
