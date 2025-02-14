@@ -200,7 +200,7 @@ def verify_slack_request(req):
 
     return True
 
-@app.route("/slack/oauth/callback")
+@flask_app.route("/slack/oauth/callback")
 def oauth_callback():
     # Step 1: Get the `code` from Slack's callback
     code = request.args.get('code')
