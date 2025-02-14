@@ -19,6 +19,9 @@ model = "mistralai/mistral-small-24b-instruct-2501:free"
 # Initialize Slack app
 app = App(token=os.environ["SLACK_BOT_TOKEN"])
 SLACK_SIGNING_SECRET = os.environ["SLACK_SIGNING_SECRET"]
+SLACK_CLIENT_ID = os.getenv("SLACK_CLIENT_ID")
+SLACK_CLIENT_SECRET = os.getenv("SLACK_CLIENT_SECRET")
+SLACK_REDIRECT_URI = os.getenv("SLACK_REDIRECT_URI")
 # Initialize Redis client
 redis_client = redis.Redis(
     host=os.environ.get("REDIS_HOST", "localhost"),
@@ -197,7 +200,37 @@ def verify_slack_request(req):
 
     return True
 
+@app.route("/slack/oauth/callback")
+def oauth_callback():
+    # Step 1: Get the `code` from Slack's callback
+    code = request.args.get('code')
+    if not code:
+        return "Error: Missing code", 400
 
+    # Step 2: Exchange the code for an access token
+    token_url = "https://slack.com/api/oauth.v2.access"
+    data = {
+        'client_id': SLACK_CLIENT_ID,
+        'client_secret': SLACK_CLIENT_SECRET,
+        'code': code,
+        'redirect_uri': SLACK_REDIRECT_URI
+    }
+    
+    # Make the request to Slack to exchange the code for a token
+    response = requests.post(token_url, data=data)
+    response_data = response.json()
+
+    if response_data.get("ok"):
+        # Successfully received access token
+        access_token = response_data["access_token"]
+        # Save the access token (e.g., in a database or session) for making Slack API calls
+        return "Slack bot installed successfully!"
+
+    else:
+        # Handle errors (e.g., invalid code or denied permissions)
+        error_msg = response_data.get("error", "Unknown error")
+        return f"Error: {error_msg}", 400
+    
 @flask_app.route("/slack/events", methods=["POST"])
 def slack_events():
     try:
